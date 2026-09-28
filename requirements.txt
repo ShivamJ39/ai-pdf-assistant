@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+pypdf
+sentence-transformers
+faiss-cpu
+numpy
+google-genai
+python-multipart
+git init
+git add main.py requirements.txt
+git commit -m "Initial commit for RAG PDF Assistant"
+git branch -M main
+git remote add origin https://github.com/ShivamJ39/ai-pdf-assistant.git
+git push -u origin main
