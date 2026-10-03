@@ -33,14 +33,22 @@ def get_embedding(text_list: list[str]) -> np.ndarray:
     try:
         response = client.models.embed_content(
             model="text-embedding-004",
-            contents=text_list
+            contents=text_list,
         )
         # Extract embedding values into a numpy float32 array
         embeddings = [item.values for item in response.embeddings]
         return np.array(embeddings, dtype=np.float32)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Embedding API Error: {str(e)}")
-
+        # Fallback to embedding-001 if text-embedding-004 throws model error
+        try:
+            response = client.models.embed_content(
+                model="embedding-001",
+                contents=text_list,
+            )
+            embeddings = [item.values for item in response.embeddings]
+            return np.array(embeddings, dtype=np.float32)
+        except Exception as fallback_err:
+            raise HTTPException(status_code=500, detail=f"Embedding API Error: {str(e)} | Fallback Error: {str(fallback_err)}")
 def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50):
     """Splits text into overlapping chunks for RAG."""
     words = text.split()
