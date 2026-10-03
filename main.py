@@ -27,7 +27,7 @@ RAG_STORE = {
 }
 
 def get_embedding_with_retry(text_list: list[str], max_retries: int = 5) -> np.ndarray:
-    """Generates embeddings with backoff retries to prevent 429 Rate Limit errors."""
+    """Generates vector embeddings with smart backoff retries for 429 errors."""
     formatted_contents = [[text] for text in text_list]
     models_to_try = ["gemini-embedding-2-preview", "text-embedding-004"]
     
@@ -41,18 +41,18 @@ def get_embedding_with_retry(text_list: list[str], max_retries: int = 5) -> np.n
                 embeddings = [item.values for item in response.embeddings]
                 return np.array(embeddings, dtype=np.float32)
             except Exception as e:
-                # If rate limited (429 / RESOURCE_EXHAUSTED), wait and retry
                 if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e):
-                    wait_time = (2 ** attempt) + 1  # Waits 2s, 3s, 5s, 9s, 17s...
-                    print(f"Rate limited (429). Retrying in {wait_time}s...")
+                    # Sleep longer on rate limit (10s, 15s, 25s...) to let 60s RPM quota reset
+                    wait_time = 10 + (attempt * 5)
+                    print(f"Rate limit reached (429). Cooling down for {wait_time} seconds...")
                     time.sleep(wait_time)
-                    break  # Retry loop
+                    break 
                 continue
                 
-    raise HTTPException(status_code=429, detail="Exceeded API rate limits. Please wait 10 seconds and try again.")
+    raise HTTPException(status_code=429, detail="Free tier rate limits exceeded. Please wait 30 seconds before retrying.")
 
-def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50):
-    """Splits text into overlapping segments."""
+def chunk_text(text: str, chunk_size: int = 600, overlap: int = 50):
+    """Splits document text into overlapping segments."""
     words = text.split()
     chunks = []
     for i in range(0, len(words), chunk_size - overlap):
@@ -82,18 +82,21 @@ async def upload_pdf(file: UploadFile = File(...)):
         # Chunk text
         chunks = chunk_text(extracted_text)
         
-        # Batch requests with a short delay to satisfy free-tier RPM limits
-        batch_size = 20
+        # Larger batch size (50 chunks per API request) drastically reduces API call frequency
+        batch_size = 50
         all_embeddings = []
+        
         for i in range(0, len(chunks), batch_size):
             batch = chunks[i:i + batch_size]
             batch_emb = get_embedding_with_retry(batch)
             all_embeddings.append(batch_emb)
-            time.sleep(1) # 1-second pause between batches
+            
+            # 3.5 second pause between batches keeps requests under Google's 15 RPM limit
+            time.sleep(3.5)
             
         embeddings = np.vstack(all_embeddings)
         
-        # Build FAISS vector index
+        # Build FAISS vector store
         dimension = embeddings.shape[1]
         index = faiss.IndexFlatL2(dimension)
         index.add(embeddings)
@@ -103,7 +106,7 @@ async def upload_pdf(file: UploadFile = File(...)):
         
         return {
             "status": "success", 
-            "message": f"Successfully processed {len(pdf_reader.pages)} pages ({len(chunks)} text chunks)!"
+            "message": f"Successfully processed {len(pdf_reader.pages)} pages into {len(chunks)} search index chunks!"
         }
     
     except Exception as e:
