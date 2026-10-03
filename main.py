@@ -29,26 +29,30 @@ RAG_STORE = {
 }
 
 def get_embedding(text_list: list[str]) -> np.ndarray:
-    """Generates vector embeddings using Google's text-embedding-004 API."""
-    try:
-        response = client.models.embed_content(
-            model="text-embedding-004",
-            contents=text_list,
-        )
-        # Extract embedding values into a numpy float32 array
-        embeddings = [item.values for item in response.embeddings]
-        return np.array(embeddings, dtype=np.float32)
-    except Exception as e:
-        # Fallback to embedding-001 if text-embedding-004 throws model error
+    """Generates vector embeddings using Google's Gemini Embedding API."""
+    # Format each text string as an individual input item
+    formatted_contents = [[text] for text in text_list]
+    
+    models_to_try = [
+        "gemini-embedding-2-preview",
+        "text-embedding-004",
+        "gemini-embedding-001"
+    ]
+    
+    last_exception = None
+    for model_name in models_to_try:
         try:
             response = client.models.embed_content(
-                model="embedding-001",
-                contents=text_list,
+                model=model_name,
+                contents=formatted_contents,
             )
             embeddings = [item.values for item in response.embeddings]
             return np.array(embeddings, dtype=np.float32)
-        except Exception as fallback_err:
-            raise HTTPException(status_code=500, detail=f"Embedding API Error: {str(e)} | Fallback Error: {str(fallback_err)}")
+        except Exception as e:
+            last_exception = e
+            continue
+            
+    raise HTTPException(status_code=500, detail=f"Embedding API Error: {str(last_exception)}")
 def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50):
     """Splits text into overlapping chunks for RAG."""
     words = text.split()
