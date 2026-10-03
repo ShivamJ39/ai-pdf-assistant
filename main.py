@@ -1,7 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pypdf import PdfReader
-from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
 from google import genai
@@ -19,18 +18,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Fetch API key from Environment Variable (security best practice)
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", )
+# Fetch API key from Environment Variable
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=GEMINI_API_KEY)
-
-# Load embedding model for vector search
-embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
 # In-memory vector store
 RAG_STORE = {
     "index": None,
     "chunks": []
 }
+
+def get_embedding(text_list: list[str]) -> np.ndarray:
+    """Generates vector embeddings using Google's text-embedding-004 API."""
+    try:
+        response = client.models.embed_content(
+            model="text-embedding-004",
+            contents=text_list
+        )
+        # Extract embedding values into a numpy float32 array
+        embeddings = [item.values for item in response.embeddings]
+        return np.array(embeddings, dtype=np.float32)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Embedding API Error: {str(e)}")
 
 def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50):
     """Splits text into overlapping chunks for RAG."""
@@ -60,20 +69,31 @@ async def upload_pdf(file: UploadFile = File(...)):
         if not extracted_text.strip():
             raise HTTPException(status_code=400, detail="Could not extract text from PDF.")
 
-        # Build Vector Store (RAG)
+        # 1. Split text into chunks
         chunks = chunk_text(extracted_text)
-        embeddings = embedder.encode(chunks, convert_to_numpy=True)
         
-        dimension = embeddings.shape[1]
+        # 2. Generate embeddings via Gemini API (batch processing)
+        # Batching in chunks of 50 to respect API request limits
+        batch_size = 50
+        all_embeddings = []
+        for i in range(0, len(chunks), batch_size):
+            batch = chunks[i:i + batch_size]
+            batch_emb = get_embedding(batch)
+            all_embeddings.append(batch_emb)
+            
+        embeddings = np.vstack(all_embeddings)
+        
+        # 3. Store in FAISS vector index
+        dimension = embeddings.shape[1] # text-embedding-004 produces 768-dim vectors
         index = faiss.IndexFlatL2(dimension)
-        index.add(np.array(embeddings, dtype=np.float32))
+        index.add(embeddings)
         
         RAG_STORE["index"] = index
         RAG_STORE["chunks"] = chunks
         
         return {
             "status": "success", 
-            "message": f"Successfully Processed {len(pdf_reader.pages)} pages "
+            "message": f"Successfully Processed {len(pdf_reader.pages)} pages into {len(chunks)} vector chunks!"
         }
     
     except Exception as e:
@@ -84,25 +104,27 @@ async def chat_with_pdf(question: str = Form(...)):
     if RAG_STORE["index"] is None:
         raise HTTPException(status_code=400, detail="Please upload a PDF first.")
     
-    # Retrieve top 3 relevant text chunks
-    query_embedding = embedder.encode([question], convert_to_numpy=True)
+    # 1. Embed user query via Gemini API
+    query_embedding = get_embedding([question])
+    
+    # 2. Retrieve top 3 nearest text chunks
     k = min(3, len(RAG_STORE["chunks"]))
-    distances, indices = RAG_STORE["index"].search(np.array(query_embedding, dtype=np.float32), k)
+    distances, indices = RAG_STORE["index"].search(query_embedding, k)
     
     retrieved_chunks = [RAG_STORE["chunks"][idx] for idx in indices[0] if idx < len(RAG_STORE["chunks"])]
     context = "\n\n---\n\n".join(retrieved_chunks)
     
     system_prompt = f"""
     You are an expert RAG PDF assistant. Answer the user's question accurately using ONLY 
-    the provided retrieved document text below. If the answer is not in the context, 
-    say "I couldn't find this information in the document."
+    the provided retrieved document text below. Base your answer strictly on the provided document text.
+    If the answer is not in the context, say "I couldn't find this information in the document."
 
     --- RETRIEVED CONTEXT ---
     {context}
     ------------------------
     """
 
-    models_to_try = [ "gemini-3.6-flash" ]
+    models_to_try = ["gemini-3.6-flash", "gemini-3.6-pro", "gemini-2.5-flash"]
     
     for model in models_to_try:
         try:
@@ -120,4 +142,6 @@ async def chat_with_pdf(question: str = Form(...)):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000)
+    # Dynamically bind port for deployment platforms like Render
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
