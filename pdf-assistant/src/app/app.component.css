@@ -427,7 +427,7 @@ h1 {
 
 .composer {
   gap: 12px;
-  margin: 0 24px;
+  margin: 12px 24px;
   padding: 8px;
   border: 1px solid #dce5d7;
   border-radius: 14px;
