@@ -1,0 +1,244 @@
+<div class="app-shell">
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="PDF Assistant home">
+      <span class="brand-icon" aria-hidden="true">P</span>
+
+      <span>
+        <strong>PDF Assistant</strong>
+        <small>Your documents, explained.</small>
+      </span>
+    </a>
+
+    <span class="status" [class.ready]="documentReady()">
+      <span class="status-dot" aria-hidden="true"></span>
+      {{ documentReady() ? 'Document ready' : 'Upload a document' }}
+    </span>
+  </header>
+
+  <main class="workspace">
+    <aside class="sidebar" aria-label="Document upload">
+      <div class="section-label">YOUR WORKSPACE</div>
+
+      <h1>Bring your PDF.<br />Find your answers.</h1>
+
+      <p class="muted">
+        Upload a document, then ask questions about its contents.
+      </p>
+
+      <div
+        class="dropzone"
+        [class.dragging]="dragging()"
+        [class.disabled]="busy()"
+        (dragover)="onDragOver($event)"
+        (dragleave)="onDragLeave()"
+        (drop)="onDrop($event)"
+      >
+        <span class="upload-icon" aria-hidden="true">↑</span>
+
+        <strong>Drop your PDF here</strong>
+        <span class="muted">or choose a file from your device</span>
+
+        <input
+          #fileInput
+          type="file"
+          accept=".pdf,application/pdf"
+          hidden
+          [disabled]="busy()"
+          (change)="onFileSelected($event)"
+        />
+
+        <button
+          type="button"
+          class="button secondary"
+          [disabled]="busy()"
+          (click)="fileInput.click()"
+        >
+          Choose PDF
+        </button>
+      </div>
+
+      @if (selectedFile(); as file) {
+        <div class="file-card">
+          <span class="pdf-badge">PDF</span>
+
+          <div class="file-info">
+            <strong [title]="file.name">{{ file.name }}</strong>
+            <small>{{ formatFileSize(file.size) }}</small>
+          </div>
+        </div>
+      }
+
+      <button
+        type="button"
+        class="button primary upload-button"
+        [disabled]="!selectedFile() || busy()"
+        (click)="uploadPdf()"
+      >
+        @if (uploading()) {
+          <span class="spinner" aria-hidden="true"></span>
+          Processing PDF…
+        } @else {
+          Upload &amp; process
+        }
+      </button>
+
+      @if (uploading()) {
+        <p class="processing-note" role="status">
+          Extracting text and preparing your document.
+          Large PDFs and API rate limits can make this take a few minutes.
+        </p>
+      }
+
+      @if (uploadMessage()) {
+        <div class="notice success" role="status">
+          {{ uploadMessage() }}
+        </div>
+      }
+
+      @if (activeDocument()) {
+        <div class="active-document">
+          <span class="section-label">ACTIVE DOCUMENT</span>
+          <strong>{{ activeDocument() }}</strong>
+        </div>
+      }
+
+      <div class="sidebar-note">
+        Answers use the document text retrieved by your backend.
+      </div>
+    </aside>
+
+    <section class="chat-panel" aria-labelledby="chat-title">
+      <div class="chat-header">
+        <div>
+          <h2 id="chat-title">Chat with your PDF</h2>
+          <p class="muted">
+            {{ activeDocument() || 'Start by uploading a document' }}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          class="button quiet"
+          [disabled]="messages().length === 0 || busy()"
+          (click)="clearConversation()"
+        >
+          Clear chat
+        </button>
+      </div>
+
+      <div
+        #chatLog
+        class="chat-log"
+        role="log"
+        aria-label="Conversation"
+        aria-live="polite"
+        aria-relevant="additions"
+        [attr.aria-busy]="asking()"
+      >
+        @if (messages().length === 0) {
+          <div class="empty-state">
+            <span class="empty-icon" aria-hidden="true">✦</span>
+
+            <h3>
+              {{ documentReady()
+                ? 'What would you like to know?'
+                : 'A little clarity starts here.' }}
+            </h3>
+
+            <p>
+              {{ documentReady()
+                ? 'Ask a question or try one of these prompts.'
+                : 'Upload your PDF to explore summaries, details, and ideas.' }}
+            </p>
+
+            @if (documentReady()) {
+              <div class="suggestions">
+                @for (suggestion of suggestions; track suggestion) {
+                  <button
+                    type="button"
+                    [disabled]="busy()"
+                    (click)="useSuggestion(suggestion)"
+                  >
+                    {{ suggestion }} <span aria-hidden="true">↗</span>
+                  </button>
+                }
+              </div>
+            }
+          </div>
+        }
+
+        @for (message of messages(); track message.id) {
+          <article
+            class="message"
+            [class.user-message]="message.role === 'user'"
+          >
+            <span class="avatar" aria-hidden="true">
+              {{ message.role === 'user' ? 'Y' : '✦' }}
+            </span>
+
+            <div class="message-content">
+              <span class="message-author">
+                {{ message.role === 'user' ? 'You' : 'PDF Assistant' }}
+              </span>
+
+              <p>{{ message.text }}</p>
+            </div>
+          </article>
+        }
+
+        @if (asking()) {
+          <div class="message">
+            <span class="avatar" aria-hidden="true">✦</span>
+
+            <div class="message-content">
+              <span class="message-author">PDF Assistant</span>
+
+              <p class="thinking">
+                <span class="spinner" aria-hidden="true"></span>
+                Finding an answer in your document…
+              </p>
+            </div>
+          </div>
+        }
+      </div>
+
+      @if (error()) {
+        <div class="notice error" role="alert">
+          {{ error() }}
+        </div>
+      }
+
+      <form class="composer" (ngSubmit)="sendQuestion()">
+        <label class="sr-only" for="question">
+          Ask a question about your PDF
+        </label>
+
+        <input
+          id="question"
+          name="question"
+          type="text"
+          autocomplete="off"
+          [ngModel]="question()"
+          (ngModelChange)="question.set($event)"
+          [disabled]="!documentReady() || busy()"
+          [placeholder]="documentReady()
+            ? 'Ask a question about your document…'
+            : 'Upload a PDF to start chatting…'"
+        />
+
+        <button
+          type="submit"
+          class="button primary"
+          [disabled]="!canSend()"
+        >
+          {{ asking() ? 'Thinking…' : 'Send' }}
+          <span aria-hidden="true">↑</span>
+        </button>
+      </form>
+
+      <p class="chat-footnote">
+        AI answers can contain mistakes. Check important details in your PDF.
+      </p>
+    </section>
+  </main>
+</div>
