@@ -590,7 +590,7 @@ a:focus-visible {
 
   .composer {
     gap: 6px;
-    margin: 0 12px;
+    margin: 12px 12px;
   }
 
   .composer .button {
@@ -606,7 +606,7 @@ a:focus-visible {
     font-size: 21px;
   }
 }
-8. src/styles.css
+
 
 *,
 *::before,
